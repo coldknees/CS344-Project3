@@ -19,7 +19,7 @@
 #define MAX_LENGTH 2048
 
 // Function Prototypes
-
+void runCommand();
 
 
 int main(int argc, char * argv[]) {	
@@ -28,8 +28,8 @@ int main(int argc, char * argv[]) {
 	struct sigaction sa;
 	sa.sa_handler = SIG_IGN;
 	sa.sa_flags = 0;
-	sigfillset(%sa.sa_mask);
-	sigaction(SIGINT, &act, NULL);
+	sigfillset(&sa.sa_mask);
+	sigaction(SIGINT, &sa, NULL);
 
 	// Allocate memory to read in the command
 	char *commandBuff = malloc(MAX_LENGTH);
@@ -51,14 +51,16 @@ int main(int argc, char * argv[]) {
 		temp = strtok(commandBuff, " \n");
 		while(temp != NULL && i <= MAX_ARGS) {
 			commandArr[i] = temp;
-			temp = strtok(commandBuff, " \n");
+			i++;
+			temp = strtok(NULL, " \n");
 		}
 
 		// testing for now, just print them out
 		int j;
-		for(j = 0; j < i; j++) {
-			printf("%d:  %s", j, commandArr[j]);
+		for(j = 0; j < 3; j++) {
+			printf("%d:  %s\n", j, commandArr[j]);
 		}
+
 	}
 
 	free(commandBuff);
