@@ -12,7 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
 
@@ -22,6 +24,7 @@
 
 // Function Prototypes
 void shLoop();
+void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat);
 int runCommand(char**);
 int isBackground(char**);
 void clearBuff(char*);
@@ -29,21 +32,12 @@ void clearArr(char**);
 void interrupt(int);
 int numArgs(char **args);
 
-//int for status
-int exitStat;
+
 
 volatile sig_atomic_t stop;
 
 int main(int argc, char * argv[]) {	
 
-	
-
-	// Set up signal handler
-	struct sigaction sa;
-	sa.sa_handler = SIG_IGN;
-	sa.sa_flags = 0;
-	sigfillset(&sa.sa_mask);
-	sigaction(SIGINT, &sa, NULL);
 
 	shLoop();
 
@@ -53,14 +47,25 @@ int main(int argc, char * argv[]) {
 
 void shLoop() {
 
+
+	// Set up signal handler
+	struct sigaction sa, saCh;
+	sa.sa_handler = SIG_IGN;
+	sa.sa_flags = 0;
+	
+	saCh.sa_handler = SIG_DFL;
+	sa.sa_flags = 0;
+	sigaction(SIGINT, &sa, &saCh);
+
 	//Files for io
 	FILE *in;
 	FILE *out;
 
 
-	int status, bgstatus, wait, bgProc;
+	int status = 0;
+	int bgstatus, waitStat;
 	int cont = 1;
-	pid_t bgwait;
+	
 
 	do {
 
@@ -77,9 +82,10 @@ void shLoop() {
 		int valid = 1;
 
 		//checks for status of background processes
-		wait = waitpid(-1, &bgstatus, WNOHANG);
+		pid_t bgwait;
+		bgwait = waitpid(-1, &bgstatus, WNOHANG);
 		if(WIFEXITED(bgstatus) && bgwait > 0) {
-			printf("background pid %d is done: exit value %d\n", wait, WEXITSTATUS(bgstatus));
+			printf("background pid %d is done: exit value %d\n", bgwait, WEXITSTATUS(bgstatus));
 		}
 		else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
 			int sig;
@@ -107,6 +113,8 @@ void shLoop() {
 		}
 
 
+
+
 		// Parse the commands
 		if(valid == 1) {
 			int i = 0;
@@ -127,6 +135,13 @@ void shLoop() {
 			printf("%d:  %s\n", j, commandArr[j]);
 		}
 
+		//conting number of arguments
+		int num = 0;
+		while(commandArr[num] != NULL) {
+			printf("%d", num);
+			num++;
+		}
+
 		//check for built in commands
 		if(valid == 1) {
 			if(strcmp(commandArr[0], "exit") == 0) {
@@ -136,6 +151,7 @@ void shLoop() {
 
 			else if(strcmp(commandArr[0], "cd") == 0) {
 				// if no path specified change to home
+				printf("cd command recognized");
 				if(commandArr[1] == NULL) {
 					char *home = getenv("HOME");
 					chdir(home);
@@ -146,89 +162,118 @@ void shLoop() {
 			}
 			else if(strcmp(commandArr[0], "status") == 0) {
 				if(WIFEXITED(bgstatus)) {
-					printf("Exit Status: ");
+					printf("Exit Status: %d", status);
+				}
+				else if(WIFSIGNALED(status)) {
+					printf("terminated by signal%d\n", WTERMSIG(status));
 				}
 			}
-		}
-
-		printf("before check for redirection\n");
-
-
-
-		int num = 0;
-		while(commandArr[num] != NULL) {
-			printf("%d", num);
-			num++;
-		}
-		printf("There are %d arguments\n", num);
-
-
-		// if there is more than one command, check for file io
-		if(num > 1 && valid == 1) {
-			int ioFlag;
-			// check for io redirection
-			if(strcmp(commandArr[1], "<") == 0) {
-				ioFlag = 1;
-				if(!(in = fopen(commandArr[2], "r"))) {
-					printf("error opening file");
-				}
-			}
-			else if(strcmp(commandArr[1], ">") == 0) {
-				ioFlag = 2;
-				if(!(out = fopen(commandArr[2], "w"))) {
-					printf("error opening file");
-				}
+			else {
+				shEx(commandArr, num, &saCh, &status);
 			}
 		}
-
-		if(valid == 1) {
-			//signal handler
-			signal(SIGINT, interrupt);
-
-			// testing this signal interrupt
-			if(strcmp(commandArr[0], "testing") == 0) {
-				while(!stop) {
-					pause();
-				}
-				printf("SIGINT sucessfully handled\n");
-			}
-		}
-
-		// check if the process should be run in the background, set flag
-		//bgProc = isBackground(commandArr);
-
-
-		// No built in function detected, fork process and run command
-		//pid_t childPid, childWait;
-		//childPid = fork();
-
-
-
 
 		free(commandBuff);
 		free(commandArr);
 
 	} while(cont);
 
+}
+
+
+void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
+	pid_t spawnPid, exitPid;
+	int bgProc = 0;
+	int out, in, f1, f2;
+
+	
+	if (spawnPid == 0) {
+		// check if the process should be run in the background, set flag
+		if(strcmp(commands[numCom-1], "&") == 0) {
+			bgProc = 1;
+		}
+	}
+
+	spawnPid = fork();
+	if(spawnPid == 0) {
+		if(bgProc != 1) {
+			sigaction(SIGINT, saCh, NULL);
+		}
 	
 
-}
+		// handle input and output redirection case
+		if(numCom >= 3) {
+			if(strcmp(commands[1], "<") == 0) {
+				f2 = open(commands[2], O_RDONLY);
+				if(f2 == -1) {
+					perror("reading");
+					exit(1);
+				}
+				in = dup2(f2, 0);
+				if(in == -1) {
+					perror("dup");
+					exit(1);
+				}
 
-// checks if the command should be ran in the background
-// numCommands is an index
-int isBackground(char **commands) {
-	int numCommands = 0;
-	while(commands[numCommands] != NULL) {
-		numCommands++;
+				// free arg[1]
+			}
+		}
+		else if(strcmp(commands[1], ">") == 0) {
+			f1 = open(commands[2], O_WRONLY);
+			if(f1 == -1) {
+				perror("writing");
+				exit(1);
+			}
+			out = dup2(f1, 1);
+			if(out == -1) {
+				perror("dup2");
+				exit(1);
+			}		
+		}
+		execvp(commands[0], commands);
+		perror(commands[0]);
+		exit(1);
+
 	}
-	if(strcmp(commands[numCommands], "&") == 0) {
-		commands[numCommands] = NULL;
-		return 1;
+	else if(spawnPid > 0) {
+		//background
+		if(bgProc == 1) {
+			printf("background pid is %d", spawnPid);
+		}
+		//foreground
+		else {
+			exitPid = waitpid(spawnPid, stat, 0);
+			if(exitPid == -1) {
+				perror("fg wait");
+			}
+			else if (exitPid > 0) {
+				if(WIFEXITED(*stat)) {
+					printf("terminated by signal %d\n", WTERMSIG(*stat), exitPid);
+				}
+			}
+		}			
 	}
 	else {
-		return 0;
+		printf("fork failed\n");
 	}
+
+	// check background
+	int bgstatus;
+	pid_t bgwait;
+	bgwait = waitpid(-1, &bgstatus, WNOHANG);
+	if(WIFEXITED(bgstatus) && bgwait > 0) {
+		printf("background pid %d is done: exit value %d\n", bgwait, WEXITSTATUS(bgstatus));
+	}
+	else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
+		int sig;
+		sig = WTERMSIG(bgstatus);
+		printf("terminated by signal %d\n", sig);
+	}
+
+
 }
+
+
 
 void interrupt(int sig) {
 	stop = 1;
