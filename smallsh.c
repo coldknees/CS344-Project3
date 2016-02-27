@@ -12,8 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
+
 
 #define MAX_ARGS 512
 #define MAX_LENGTH 2048
@@ -24,9 +26,17 @@ int runCommand(char**);
 int isBackground(char**);
 void clearBuff(char*);
 void clearArr(char**);
+void interrupt(int);
+int numArgs(char **args);
 
+//int for status
+int exitStat;
+
+volatile sig_atomic_t stop;
 
 int main(int argc, char * argv[]) {	
+
+	
 
 	// Set up signal handler
 	struct sigaction sa;
@@ -43,21 +53,45 @@ int main(int argc, char * argv[]) {
 
 void shLoop() {
 
-	//int for status
-	int status;
+	//Files for io
+	FILE *in;
+	FILE *out;
 
-	// Allocate memory to read in the command
-	char *commandBuff = malloc(MAX_LENGTH);
-	char **commandArr = malloc(MAX_ARGS * sizeof(char*));
 
+	int status, bgstatus, wait, bgProc;
+	int cont = 1;
+	pid_t bgwait;
 
 	do {
+
+		// Allocate memory to read in the command
+		char *commandBuff = malloc(MAX_LENGTH);
+		char **commandArr = malloc(MAX_ARGS * sizeof(char*));
+
+		// set all of the pointers to null
+		int count;
+		for(count = 0; count < MAX_ARGS; count++) {
+			commandArr[count] = NULL;
+		}
+		// declare necessary varibles
 		int valid = 1;
+
+		//checks for status of background processes
+		wait = waitpid(-1, &bgstatus, WNOHANG);
+		if(WIFEXITED(bgstatus) && bgwait > 0) {
+			printf("background pid %d is done: exit value %d\n", wait, WEXITSTATUS(bgstatus));
+		}
+		else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
+			int sig;
+			sig = WTERMSIG(bgstatus);
+			printf("terminated by signal %d\n", sig);
+		}
+
 
 		// Get the command fromt the user
 		printf(": ");
 		fflush(stdout);
-		fgets(commandBuff, MAX_LENGTH,stdin);
+		fgets(commandBuff, MAX_LENGTH, stdin);
 		
 
 		//check for comment lines
@@ -71,6 +105,7 @@ void shLoop() {
 			printf("The line was empty\n");
 			valid = 0;
 		}
+
 
 		// Parse the commands
 		if(valid == 1) {
@@ -86,111 +121,123 @@ void shLoop() {
 		}
 
 
-
 		// testing for now, just print them out
 		int j;
 		for(j = 0; j < 3; j++) {
 			printf("%d:  %s\n", j, commandArr[j]);
 		}
 
-
-
-		//check for exit command
+		//check for built in commands
 		if(valid == 1) {
 			if(strcmp(commandArr[0], "exit") == 0) {
 				printf("exiting...\n");
-				status = 0;
+				cont = 0;
 			}
-			else {
-				status = runCommand(commandArr);
+
+			else if(strcmp(commandArr[0], "cd") == 0) {
+				// if no path specified change to home
+				if(commandArr[1] == NULL) {
+					char *home = getenv("HOME");
+					chdir(home);
+				}
+				else if(chdir(commandArr[1]) == -1) {
+					printf("no such directory\n");
+				}
+			}
+			else if(strcmp(commandArr[0], "status") == 0) {
+				if(WIFEXITED(bgstatus)) {
+					printf("Exit Status: ");
+				}
 			}
 		}
-		
-		clearBuff(commandBuff);
-		clearArr(commandArr);
 
-	} while(status);
-
-	free(commandBuff);
-	free(commandArr);
-
-}
-
-int runCommand(char **commands) {
+		printf("before check for redirection\n");
 
 
-	if(isBackground(commands)) {
-		printf("this is a background command");
-	}
 
-	pid_t pid, wpid;
-	pid_t spawnpid = -5;
-	int status;
-
-	spawnpid = fork();
+		int num = 0;
+		while(commandArr[num] != NULL) {
+			printf("%d", num);
+			num++;
+		}
+		printf("There are %d arguments\n", num);
 
 
-	switch(spawnpid) {
-		case -1:
-			printf("Something went wrong with the fork!!\n");
-			exit(1);
-			break;
-		case 0:
-			printf("child...\n");
-			if(execvp(commands[0], commands) == -1) {
-				perror("lsh");
+		// if there is more than one command, check for file io
+		if(num > 1 && valid == 1) {
+			int ioFlag;
+			// check for io redirection
+			if(strcmp(commandArr[1], "<") == 0) {
+				ioFlag = 1;
+				if(!(in = fopen(commandArr[2], "r"))) {
+					printf("error opening file");
+				}
 			}
+			else if(strcmp(commandArr[1], ">") == 0) {
+				ioFlag = 2;
+				if(!(out = fopen(commandArr[2], "w"))) {
+					printf("error opening file");
+				}
+			}
+		}
 
-		default: 
-			printf("i am the parent");
-			do {
-				wpid = waitpid(pid, &status, WUNTRACED);
-			} while(!WIFEXITED(status) && !WIFSIGNALED(status));
+		if(valid == 1) {
+			//signal handler
+			signal(SIGINT, interrupt);
 
-	}
+			// testing this signal interrupt
+			if(strcmp(commandArr[0], "testing") == 0) {
+				while(!stop) {
+					pause();
+				}
+				printf("SIGINT sucessfully handled\n");
+			}
+		}
+
+		// check if the process should be run in the background, set flag
+		//bgProc = isBackground(commandArr);
 
 
-	//check for a cd command
-	if(strcmp(commands[0], "cd") == 0)   {
-		printf("changing directories....\n");
-	}
+		// No built in function detected, fork process and run command
+		//pid_t childPid, childWait;
+		//childPid = fork();
 
 
-	// check for ls command
-	if(strcmp(commands[0], "ls") == 0) {
-		printf("listing current dir...\n");
-	}
 
-	return 1;
+
+		free(commandBuff);
+		free(commandArr);
+
+	} while(cont);
+
+	
+
 }
-
-// Sources Cited
-// http://brennan.io/2015/01/16/write-a-shell-in-c/
-
-void clearBuff(char *buffer) {
-	printf("clearing buffer\n");
-	memset(buffer, 0, (sizeof(char)*MAX_LENGTH));
-}
-
-void clearArr(char **arr) {
-	printf("clearing array\n");
-	int i;
-	for(i = 0; i < MAX_ARGS; i++) {
-		arr[i] = NULL;
-	}
-}
-
 
 // checks if the command should be ran in the background
+// numCommands is an index
 int isBackground(char **commands) {
 	int numCommands = 0;
 	while(commands[numCommands] != NULL) {
 		numCommands++;
 	}
 	if(strcmp(commands[numCommands], "&") == 0) {
+		commands[numCommands] = NULL;
 		return 1;
 	}
 	else {
 		return 0;
 	}
+}
+
+void interrupt(int sig) {
+	stop = 1;
+}
+
+int numArgs(char **args) {
+	int num = 0;
+	while(args[num] != NULL) {
+		num++;
+	}
+	return num;
 }
