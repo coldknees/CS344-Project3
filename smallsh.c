@@ -29,8 +29,6 @@ int runCommand(char**);
 int isBackground(char**);
 void clearBuff(char*);
 void clearArr(char**);
-void interrupt(int);
-int numArgs(char **args);
 
 
 
@@ -90,7 +88,9 @@ void shLoop() {
 		else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
 			int sig;
 			sig = WTERMSIG(bgstatus);
-			printf("terminated by signal %d\n", sig);
+			if(sig != 0) {
+				printf("terminated by signal %d\n", sig);
+			}
 		}
 
 
@@ -102,13 +102,11 @@ void shLoop() {
 
 		//check for comment lines
 		if(commandBuff[0] == '#') {
-			printf("comment line\n");
 			valid = 0;
 		}
 
 		//check if the line is empty
 		if(commandBuff[0] == '\n') {
-			printf("The line was empty\n");
 			valid = 0;
 		}
 
@@ -128,30 +126,20 @@ void shLoop() {
 			}
 		}
 
-
-		// testing for now, just print them out
-		int j;
-		for(j = 0; j < 3; j++) {
-			printf("%d:  %s\n", j, commandArr[j]);
-		}
-
 		//conting number of arguments
 		int num = 0;
 		while(commandArr[num] != NULL) {
-			printf("%d", num);
 			num++;
 		}
 
 		//check for built in commands
 		if(valid == 1) {
 			if(strcmp(commandArr[0], "exit") == 0) {
-				printf("exiting...\n");
 				cont = 0;
 			}
 
 			else if(strcmp(commandArr[0], "cd") == 0) {
 				// if no path specified change to home
-				printf("cd command recognized");
 				if(commandArr[1] == NULL) {
 					char *home = getenv("HOME");
 					chdir(home);
@@ -162,10 +150,15 @@ void shLoop() {
 			}
 			else if(strcmp(commandArr[0], "status") == 0) {
 				if(WIFEXITED(bgstatus)) {
-					printf("Exit Status: %d", status);
+					printf("exit value: %d\n", status);
 				}
 				else if(WIFSIGNALED(status)) {
-					printf("terminated by signal%d\n", WTERMSIG(status));
+					if(status != 0) {
+						printf("terminated by signal%d\n", WTERMSIG(status));
+					}
+				}
+				else {
+					printf("exit value %d\n", status);
 				}
 			}
 			else {
@@ -173,6 +166,7 @@ void shLoop() {
 			}
 		}
 
+		// remove buffer and array
 		free(commandBuff);
 		free(commandArr);
 
@@ -184,55 +178,95 @@ void shLoop() {
 void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
 	pid_t spawnPid, exitPid;
 	int bgProc = 0;
-	int out, in, f1, f2;
+	int out, in, f2, f1;
 
-	
 	if (spawnPid == 0) {
 		// check if the process should be run in the background, set flag
 		if(strcmp(commands[numCom-1], "&") == 0) {
 			bgProc = 1;
+			commands[numCom-1] = NULL;
 		}
 	}
 
 	spawnPid = fork();
+
 	if(spawnPid == 0) {
 		if(bgProc != 1) {
 			sigaction(SIGINT, saCh, NULL);
 		}
-	
 
+		/******************************************
+		//while loop to go through the arguments
+		int argCount = 0;
+		while(argCount <= numCom) {
+
+
+			argCount++;
+		}
+
+
+		**********************************************/
 		// handle input and output redirection case
 		if(numCom >= 3) {
 			if(strcmp(commands[1], "<") == 0) {
-				f2 = open(commands[2], O_RDONLY);
-				if(f2 == -1) {
-					perror("reading");
+				f1 = open(commands[2], O_RDONLY);
+				if(f1 == -1) {
+					perror("cannot open badfile or input\n");
 					exit(1);
 				}
-				in = dup2(f2, 0);
+				in = dup2(f1, 0);
 				if(in == -1) {
 					perror("dup");
 					exit(1);
 				}
 
-				// free arg[1]
+			}
+
+			if(strcmp(commands[1], ">") == 0) {
+				f2 = open(commands[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+				if(f2 == -1) {
+					perror("cannot open badfile or input");
+					exit(1);
+				}
+				out = dup2(f2, 1);
+				if(out == -1) {
+					perror("dup2");
+					exit(1);
+				}
 			}
 		}
-		else if(strcmp(commands[1], ">") == 0) {
-			f1 = open(commands[2], O_WRONLY);
-			if(f1 == -1) {
-				perror("writing");
-				exit(1);
-			}
-			out = dup2(f1, 1);
-			if(out == -1) {
-				perror("dup2");
-				exit(1);
-			}		
+
+
+		if(numCom == 1) {
+			execvp(commands[0], commands);
 		}
+
+		if(numCom == 3 && strcmp(commands[1], "<") == 0) {
+
+			commands[1] = commands[2];
+			commands[2] = NULL;
+			execvp(commands[0], commands);
+			perror(commands[0]);
+			exit(1);
+
+		}
+
+		if(numCom == 3 && strcmp(commands[1], ">") == 0) {
+
+			commands[1] = commands[2];
+			commands[2] = NULL;
+			execvp(commands[0], commands);+
+			3
+			perror(commands[0]);
+			exit(1);
+
+		}
+
+
 		execvp(commands[0], commands);
 		perror(commands[0]);
 		exit(1);
+
 
 	}
 	else if(spawnPid > 0) {
@@ -248,7 +282,9 @@ void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
 			}
 			else if (exitPid > 0) {
 				if(WIFEXITED(*stat)) {
-					printf("terminated by signal %d\n", WTERMSIG(*stat), exitPid);
+					if(WTERMSIG(*stat) != 0) {
+						printf("terminated by signal %d\n", WTERMSIG(*stat), exitPid);
+					}
 				}
 			}
 		}			
@@ -267,22 +303,10 @@ void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
 	else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
 		int sig;
 		sig = WTERMSIG(bgstatus);
-		printf("terminated by signal %d\n", sig);
+		if(sig != 0) {
+			printf("terminated by signal %d\n", sig);
+		}
 	}
 
 
-}
-
-
-
-void interrupt(int sig) {
-	stop = 1;
-}
-
-int numArgs(char **args) {
-	int num = 0;
-	while(args[num] != NULL) {
-		num++;
-	}
-	return num;
 }
