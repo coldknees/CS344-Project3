@@ -2,8 +2,10 @@
 * Mark Rushmere
 * CS 344
 * Project 3
-* Description: This is a small shell script program with support for the
-* commands exit, cd, and status.
+* Description: This is a small shell script program with built in 
+* support for the commands exit, cd, and status. processes can be ran
+* in the background by having "&" as the last argument. 
+* To exit the program type "exit".
 ***********************************************************************/
 
 
@@ -24,21 +26,17 @@
 
 // Function Prototypes
 void shLoop();
-void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat);
+void shEx(char **commands, int numCom, struct sigaction *saCh, struct sigaction *sa, int *stat);
 int runCommand(char**);
 int isBackground(char**);
+void checkBackground();
 void clearBuff(char*);
 void clearArr(char**);
 
 
-
-volatile sig_atomic_t stop;
-
 int main(int argc, char * argv[]) {	
 
-
 	shLoop();
-
 	return 0;	
 }
 
@@ -48,9 +46,11 @@ void shLoop() {
 
 	// Set up signal handler
 	struct sigaction sa, saCh;
+	// sa sig handler is the sigHandle function
 	sa.sa_handler = SIG_IGN;
 	sa.sa_flags = 0;
 	
+	// background processes get default signal handling
 	saCh.sa_handler = SIG_DFL;
 	sa.sa_flags = 0;
 	sigaction(SIGINT, &sa, &saCh);
@@ -60,8 +60,9 @@ void shLoop() {
 	FILE *out;
 
 
+	// initialize forground and background exit statuses
 	int status = 0;
-	int bgstatus, waitStat;
+	int bgstatus;
 	int cont = 1;
 	
 
@@ -80,19 +81,7 @@ void shLoop() {
 		int valid = 1;
 
 		//checks for status of background processes
-		pid_t bgwait;
-		bgwait = waitpid(-1, &bgstatus, WNOHANG);
-		if(WIFEXITED(bgstatus) && bgwait > 0) {
-			printf("background pid %d is done: exit value %d\n", bgwait, WEXITSTATUS(bgstatus));
-		}
-		else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
-			int sig;
-			sig = WTERMSIG(bgstatus);
-			if(sig != 0) {
-				printf("terminated by signal %d\n", sig);
-			}
-		}
-
+		checkBackground();
 
 		// Get the command fromt the user
 		printf(": ");
@@ -110,14 +99,12 @@ void shLoop() {
 			valid = 0;
 		}
 
-
-
-
 		// Parse the commands
 		if(valid == 1) {
 			int i = 0;
 			char* temp;
 			strtok(commandBuff, "\n");
+			//split the line up with spaces or newlines
 			temp = strtok(commandBuff, " \n");
 			while(temp != NULL && i <= MAX_ARGS) {
 				commandArr[i] = temp;
@@ -144,25 +131,22 @@ void shLoop() {
 					char *home = getenv("HOME");
 					chdir(home);
 				}
+				// if the directory is entered wrong. Print error message
 				else if(chdir(commandArr[1]) == -1) {
 					printf("no such directory\n");
 				}
 			}
+			// status command
 			else if(strcmp(commandArr[0], "status") == 0) {
-				if(WIFEXITED(bgstatus)) {
-					printf("exit value: %d\n", status);
+				if(WIFEXITED(status)) {
+					printf("exit value %d\n", WEXITSTATUS(status));
 				}
 				else if(WIFSIGNALED(status)) {
-					if(status != 0) {
-						printf("terminated by signal%d\n", WTERMSIG(status));
-					}
-				}
-				else {
-					printf("exit value %d\n", status);
+						printf("terminated by signal %d\n", WTERMSIG(status));
 				}
 			}
 			else {
-				shEx(commandArr, num, &saCh, &status);
+				shEx(commandArr, num, &saCh, &sa, &status);
 			}
 		}
 
@@ -175,94 +159,62 @@ void shLoop() {
 }
 
 
-void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
+void shEx(char **commands, int numCom, struct sigaction *saCh, struct sigaction *sa, int *stat) {
 	pid_t spawnPid, exitPid;
 	int bgProc = 0;
-	int out, in, f2, f1;
+	int f2, f1;
+	int in = -7;
+	int out = -7;
 
-	if (spawnPid == 0) {
-		// check if the process should be run in the background, set flag
-		if(strcmp(commands[numCom-1], "&") == 0) {
-			bgProc = 1;
-			commands[numCom-1] = NULL;
-		}
+	// check if the process should be run in the background, set flag
+	if(strcmp(commands[numCom-1], "&") == 0) {
+		bgProc = 1;
+		commands[numCom-1] = NULL;
 	}
 
 	spawnPid = fork();
-
 	if(spawnPid == 0) {
+
+		// set the handlers for sigints
 		if(bgProc != 1) {
 			sigaction(SIGINT, saCh, NULL);
 		}
-
-		/******************************************
 		//while loop to go through the arguments
 		int argCount = 0;
-		while(argCount <= numCom) {
-
-
-			argCount++;
-		}
-
-
-		**********************************************/
-		// handle input and output redirection case
-		if(numCom >= 3) {
-			if(strcmp(commands[1], "<") == 0) {
-				f1 = open(commands[2], O_RDONLY);
+		while(commands[argCount] != NULL) {
+			// handle input and output redirection case
+			if(strcmp(commands[argCount], "<") == 0) {
+				f1 = open(commands[argCount+1], O_RDONLY);
 				if(f1 == -1) {
 					perror("cannot open badfile or input\n");
 					exit(1);
 				}
 				in = dup2(f1, 0);
 				if(in == -1) {
-					perror("dup");
+					perror("dup2\n");
 					exit(1);
 				}
+				commands[argCount] = NULL;
 
 			}
 
-			if(strcmp(commands[1], ">") == 0) {
-				f2 = open(commands[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			else if(strcmp(commands[argCount], ">") == 0) {
+				f2 = open(commands[argCount+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
 				if(f2 == -1) {
-					perror("cannot open badfile or input");
+					perror("cannot open badfile or input\n");
 					exit(1);
 				}
 				out = dup2(f2, 1);
 				if(out == -1) {
-					perror("dup2");
+					perror("dup2\n");
 					exit(1);
 				}
+				commands[argCount] = NULL;
 			}
+			argCount++;
 		}
 
-
-		if(numCom == 1) {
-			execvp(commands[0], commands);
-		}
-
-		if(numCom == 3 && strcmp(commands[1], "<") == 0) {
-
-			commands[1] = commands[2];
-			commands[2] = NULL;
-			execvp(commands[0], commands);
-			perror(commands[0]);
-			exit(1);
-
-		}
-
-		if(numCom == 3 && strcmp(commands[1], ">") == 0) {
-
-			commands[1] = commands[2];
-			commands[2] = NULL;
-			execvp(commands[0], commands);+
-			3
-			perror(commands[0]);
-			exit(1);
-
-		}
-
-
+		// execute the commands using the array of commands
 		execvp(commands[0], commands);
 		perror(commands[0]);
 		exit(1);
@@ -272,41 +224,37 @@ void shEx(char **commands, int numCom, struct sigaction *saCh, int *stat) {
 	else if(spawnPid > 0) {
 		//background
 		if(bgProc == 1) {
-			printf("background pid is %d", spawnPid);
+			printf("background pid is %d\n", spawnPid);
 		}
 		//foreground
 		else {
 			exitPid = waitpid(spawnPid, stat, 0);
-			if(exitPid == -1) {
-				perror("fg wait");
-			}
-			else if (exitPid > 0) {
-				if(WIFEXITED(*stat)) {
-					if(WTERMSIG(*stat) != 0) {
-						printf("terminated by signal %d\n", WTERMSIG(*stat), exitPid);
-					}
-				}
-			}
+			if((exitPid > 0) && WIFSIGNALED(*stat)) {
+				printf("terminated by signal %d\n", WTERMSIG(*stat), exitPid);
+			}			
 		}			
 	}
 	else {
-		printf("fork failed\n");
+		printf("process failed\n");
 	}
 
-	// check background
-	int bgstatus;
-	pid_t bgwait;
-	bgwait = waitpid(-1, &bgstatus, WNOHANG);
-	if(WIFEXITED(bgstatus) && bgwait > 0) {
-		printf("background pid %d is done: exit value %d\n", bgwait, WEXITSTATUS(bgstatus));
-	}
-	else if(WIFSIGNALED(bgstatus) && bgwait > 0) {
-		int sig;
-		sig = WTERMSIG(bgstatus);
-		if(sig != 0) {
-			printf("terminated by signal %d\n", sig);
-		}
-	}
+	checkBackground();
+}
 
 
+// checks background processes
+void checkBackground() {
+		pid_t bgp = 0;
+		int bgs;
+		do {
+			bgp = waitpid(-1, &bgs, WNOHANG);
+			if (bgp > 0) {
+				if(WIFEXITED(bgs)) {
+					printf("background pid %d is done: exit value %d\n", (int)bgp, WEXITSTATUS(bgs));
+				}
+				else if(WIFSIGNALED(bgs)) {
+					printf("terminated by signal %d\n", WTERMSIG(bgs));
+				}
+			}
+		} while(bgp > 0);
 }
